@@ -213,6 +213,8 @@ document.addEventListener('DOMContentLoaded', () => {
     // --- APPLICATION STATE ---
     let allCards = [];
     const chartDataCache = {}; 
+    // MODIFICATION: Added 'Tribal' to the set
+    const SUPERTYPES = new Set(['Basic', 'Legendary', 'Ongoing', 'Snow', 'World', 'Elite', 'Host', 'Tribal']);
 
     // --- CORE FUNCTIONS ---
     function showAlert(message, isError = false) {
@@ -268,7 +270,8 @@ document.addEventListener('DOMContentLoaded', () => {
                 next_page_url = pageData.has_more ? pageData.next_page : null;
                 if (next_page_url) await new Promise(resolve => setTimeout(resolve, 100)); 
             }
-            allCards = cards;
+            allCards = cards.map(parseTypeLine);
+            
             clearUnpinnedCharts();
             populateDataPropertyDropdown();
             chartBuilder.classList.remove('hidden');
@@ -287,12 +290,57 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     }
 
+    function parseTypeLine(card) {
+        const typeLine = card.type_line || '';
+        const parts = typeLine.split(' — ');
+        let mainTypesPart = parts[0];
+        const subtypesPart = parts.length > 1 ? parts[1] : '';
+        const supertypes = [];
+        const words = mainTypesPart.split(' ');
+        let typeWords = [];
+        for(const word of words) {
+            if(SUPERTYPES.has(word)) {
+                // MODIFICATION: Map 'Tribal' to 'Kindred'
+                if (word === 'Tribal') {
+                    supertypes.push('Kindred');
+                } else {
+                    supertypes.push(word);
+                }
+            } else {
+                typeWords.push(word);
+            }
+        }
+        mainTypesPart = typeWords.join(' ');
+        
+        let subtypes = [];
+        if (subtypesPart) {
+            if(subtypesPart.toLowerCase().includes('time lord')) {
+                subtypes = subtypesPart.split(' ').reduce((acc, word, index, arr) => {
+                    if (word.toLowerCase() === 'time' && arr[index+1]?.toLowerCase() === 'lord') {
+                        acc.push('Time Lord');
+                    } else if (word.toLowerCase() !== 'lord' || arr[index-1]?.toLowerCase() !== 'time') {
+                        acc.push(word);
+                    }
+                    return acc;
+                }, []);
+            } else {
+                subtypes = subtypesPart.split(' ');
+            }
+        }
+        return {
+            ...card,
+            inferred_supertypes: supertypes,
+            inferred_card_types: mainTypesPart.split(' ').filter(t => t),
+            inferred_subtypes: subtypes
+        };
+    }
+
     function populateDataPropertyDropdown() {
         if (allCards.length === 0) return;
         const firstCard = allCards[0];
         const validKeys = Object.keys(firstCard).filter(key => {
             const value = firstCard[key];
-            return typeof value !== 'object' || Array.isArray(value) || value === null;
+            return (typeof value !== 'object' || Array.isArray(value) || value === null);
         }).sort();
 
         dataPropertySelect.innerHTML = '<option value="">-- Select a property --</option>';
@@ -302,7 +350,7 @@ document.addEventListener('DOMContentLoaded', () => {
             option.textContent = key;
             dataPropertySelect.appendChild(option);
         });
-        updateDynamicUI(); // Reset UI state
+        updateDynamicUI();
     }
 
     function clearUnpinnedCharts() {
@@ -350,7 +398,7 @@ document.addEventListener('DOMContentLoaded', () => {
                     dataSource.forEach(card => {
                         const value = card[property] || [];
                         if (value.length === 0) {
-                            const emptyCategory = isColorProp ? 'Colorless' : 'None';
+                            const emptyCategory = isColorProp ? 'Colorless' : (property.startsWith('inferred') ? 'None' : 'N/A');
                             counts.set(emptyCategory, (counts.get(emptyCategory) || 0) + 1);
                         } else {
                             value.forEach(item => counts.set(item, (counts.get(item) || 0) + 1));
@@ -446,7 +494,8 @@ document.addEventListener('DOMContentLoaded', () => {
         const firstValue = allCards.find(c => c[property] != null)?.[property];
         const isArray = Array.isArray(firstValue);
         const config = {
-            property, chartType: chartTypeSelect.value, 
+            property, 
+            chartType: chartTypeSelect.value, 
             title: chartTitleInput.value || `${property.replace(/_/g, ' ')} Distribution`, 
             limit: categoryLimitInput.value,
             arrayMode: isArray ? arrayHandlingModeSelect.value : null
@@ -473,10 +522,8 @@ document.addEventListener('DOMContentLoaded', () => {
     
     function buildChartControls(chartWrapper, initialData) {
         const chartId = chartWrapper.dataset.chartId;
-
         const mainControls = document.createElement('div');
         mainControls.className = 'absolute top-3 right-3 z-20 flex gap-2';
-        // FIX: Updated settings icon to a 'sliders' icon
         mainControls.innerHTML = `
             <button class="settings-btn p-2 bg-gray-700 hover:bg-gray-600 rounded-full transition text-gray-300 hover:text-white" title="Customize Categories">
                 <svg class="h-5 w-5" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor">
@@ -487,18 +534,14 @@ document.addEventListener('DOMContentLoaded', () => {
                  <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M9 2a1 1 0 00-.894.553L7.382 4H4a1 1 0 000 2v10a2 2 0 002 2h8a2 2 0 002-2V6a1 1 0 100-2h-3.382l-.724-1.447A1 1 0 0011 2H9zM7 8a1 1 0 012 0v6a1 1 0 11-2 0V8zm4 0a1 1 0 012 0v6a1 1 0 11-2 0V8z" clip-rule="evenodd" /></svg>
             </button>
         `;
-
         const pinControl = document.createElement('div');
         pinControl.className = 'absolute top-3 left-3 z-20';
         pinControl.innerHTML = `<button class="pin-btn p-2 bg-gray-700 hover:bg-gray-600 rounded-full transition text-gray-300 hover:text-white" title="Pin chart"><svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" viewBox="0 0 20 20" fill="currentColor"><path d="M5 4a2 2 0 012-2h6a2 2 0 012 2v14l-5-2.5L5 18V4z" /></svg></button>`;
-        
         const sidePanel = document.createElement('div');
         sidePanel.className = 'chart-side-panel absolute top-0 right-0 h-full w-64 bg-gray-900 bg-opacity-90 backdrop-blur-sm p-4 z-10 shadow-lg';
         sidePanel.innerHTML = `<h4 class="text-lg font-bold mb-3 text-white">Category Customization</h4>`;
-        
         const controlList = document.createElement('div');
         controlList.className = 'flex flex-col gap-2 overflow-y-auto h-[calc(100%-2rem)]';
-
         initialData.forEach(({ label }) => {
             const item = document.createElement('div');
             item.className = 'flex items-center gap-2 text-sm';
@@ -509,7 +552,6 @@ document.addEventListener('DOMContentLoaded', () => {
             `;
             controlList.appendChild(item);
         });
-
         sidePanel.appendChild(controlList);
         chartWrapper.append(pinControl, mainControls, sidePanel);
     }
@@ -517,26 +559,20 @@ document.addEventListener('DOMContentLoaded', () => {
     function redrawChart(chartId) {
         const chartWrapper = document.querySelector(`[data-chart-id="${chartId}"]`);
         if (!chartWrapper) return;
-        
         const config = JSON.parse(chartWrapper.dataset.config);
         const chartElement = chartWrapper.querySelector('.flex-grow');
-        
         const hiddenCategories = new Set();
         chartWrapper.querySelectorAll('.visibility-toggle:not(:checked)').forEach(toggle => {
             hiddenCategories.add(toggle.dataset.label);
         });
-
         const customColorMap = new Map();
         chartWrapper.querySelectorAll('.chart-color-input').forEach(input => {
             customColorMap.set(input.dataset.label, input.value);
         });
-
         const colorScale = d3.scaleOrdinal()
             .domain(Array.from(customColorMap.keys()))
             .range(Array.from(customColorMap.values()));
-            
         const data = processData(config.property, chartId, hiddenCategories);
-
         if (config.chartType === 'bar') {
             renderBarChart(chartElement, data, config.title, colorScale, chartId);
         } else {
