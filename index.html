@@ -213,7 +213,6 @@ document.addEventListener('DOMContentLoaded', () => {
     // --- APPLICATION STATE ---
     let allCards = [];
     const chartDataCache = {}; 
-    // MODIFICATION: Added 'Tribal' to the set
     const SUPERTYPES = new Set(['Basic', 'Legendary', 'Ongoing', 'Snow', 'World', 'Elite', 'Host', 'Tribal']);
 
     // --- CORE FUNCTIONS ---
@@ -291,7 +290,12 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     function parseTypeLine(card) {
-        const typeLine = card.type_line || '';
+        let typeLine = card.type_line || '';
+        // MODIFICATION: Handle double-faced cards by only looking at the front face
+        if (typeLine.includes('//')) {
+            typeLine = typeLine.split('//')[0].trim();
+        }
+
         const parts = typeLine.split(' — ');
         let mainTypesPart = parts[0];
         const subtypesPart = parts.length > 1 ? parts[1] : '';
@@ -300,7 +304,6 @@ document.addEventListener('DOMContentLoaded', () => {
         let typeWords = [];
         for(const word of words) {
             if(SUPERTYPES.has(word)) {
-                // MODIFICATION: Map 'Tribal' to 'Kindred'
                 if (word === 'Tribal') {
                     supertypes.push('Kindred');
                 } else {
