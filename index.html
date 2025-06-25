@@ -56,8 +56,16 @@
         }
 
         /* Chart container styling for responsive grid */
-        .chart-container {
-            border: 1px solid #374151; /* border-gray-700 */
+        .chart-wrapper {
+            overflow: hidden; /* Important for the side panel */
+        }
+        
+        .chart-side-panel {
+            transition: transform 0.3s ease-in-out;
+            transform: translateX(100%);
+        }
+        .chart-side-panel.is-open {
+            transform: translateX(0);
         }
     </style>
 </head>
@@ -97,7 +105,7 @@
             <!-- Chart Builder UI -->
             <div id="chart-builder" class="bg-gray-800 p-6 rounded-xl shadow-lg mt-8 hidden">
                 <h2 class="text-2xl font-bold mb-4 text-white">Chart Builder</h2>
-                <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
                     <!-- Chart Type -->
                     <div>
                         <label for="chart-type" class="block text-sm font-medium text-gray-300 mb-1">Chart Type</label>
@@ -113,19 +121,26 @@
                             <option>-- Search first --</option>
                         </select>
                     </div>
+                    <!-- Array Handling Wrapper -->
+                    <div id="array-handling-wrapper" class="hidden">
+                        <label for="array-handling-mode" class="block text-sm font-medium text-gray-300 mb-1">Array Handling</label>
+                        <select id="array-handling-mode" class="w-full bg-gray-700 text-white border border-gray-600 rounded-lg px-3 py-2 focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none">
+                            <option value="flatten">Flatten (Count Each)</option>
+                            <option value="combine">Combine (Exact Match)</option>
+                            <option value="summarize" id="summarize-option" class="hidden">Summarize (Colors Only)</option>
+                        </select>
+                    </div>
                     <!-- Category Limit Wrapper -->
                     <div id="category-limit-wrapper" class="hidden">
                         <label for="category-limit" class="block text-sm font-medium text-gray-300 mb-1">Category Limit</label>
                         <input type="number" id="category-limit" value="15" min="1" class="w-full bg-gray-700 text-white border border-gray-600 rounded-lg px-3 py-2 focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none">
                     </div>
                     <!-- Chart Title -->
-                    <div class="md:col-span-2 lg:col-span-3">
+                    <div class="col-span-1 md:col-span-2 lg:col-span-4">
                         <label for="chart-title" class="block text-sm font-medium text-gray-300 mb-1">Chart Title (Optional)</label>
                         <input type="text" id="chart-title" placeholder="e.g., 'Card Distribution by Rarity'" class="w-full bg-gray-700 text-white placeholder-gray-400 border border-gray-600 rounded-lg px-3 py-2 focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none">
                     </div>
                 </div>
-                <!-- Custom Color Mapping -->
-                <div id="color-mapper-container" class="mt-4"></div>
 
                 <div class="mt-6 flex justify-end">
                     <button id="add-chart-button" class="bg-green-600 hover:bg-green-700 text-white font-semibold px-6 py-3 rounded-lg transition duration-200 shadow focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-offset-gray-800 focus:ring-green-500">
@@ -183,8 +198,10 @@ document.addEventListener('DOMContentLoaded', () => {
     const chartTypeSelect = document.getElementById('chart-type');
     const categoryLimitWrapper = document.getElementById('category-limit-wrapper');
     const categoryLimitInput = document.getElementById('category-limit');
+    const arrayHandlingWrapper = document.getElementById('array-handling-wrapper');
+    const arrayHandlingModeSelect = document.getElementById('array-handling-mode');
+    const summarizeOption = document.getElementById('summarize-option');
     const chartTitleInput = document.getElementById('chart-title');
-    const colorMapperContainer = document.getElementById('color-mapper-container');
     const tooltip = d3.select("#d3-tooltip");
     const cardModal = document.getElementById('card-modal');
     const modalCloseButton = document.getElementById('modal-close');
@@ -195,15 +212,9 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // --- APPLICATION STATE ---
     let allCards = [];
-    const chartDataCache = {}; // MODIFICATION: Cache for chart-specific data
+    const chartDataCache = {}; 
 
     // --- CORE FUNCTIONS ---
-
-    /**
-     * Shows a non-blocking toast notification.
-     * @param {string} message - The message to display.
-     * @param {boolean} isError - If true, displays as an error (red).
-     */
     function showAlert(message, isError = false) {
         const notificationArea = document.getElementById('notification-area');
         const alertId = `alert-${Date.now()}`;
@@ -215,25 +226,16 @@ document.addEventListener('DOMContentLoaded', () => {
         alertDiv.textContent = message;
 
         notificationArea.appendChild(alertDiv);
-
-        // Animate in
         requestAnimationFrame(() => {
             alertDiv.classList.remove('translate-x-full', 'opacity-0');
         });
-
-        // Auto-dismiss
         setTimeout(() => {
             alertDiv.classList.add('opacity-0');
             alertDiv.addEventListener('transitionend', () => alertDiv.remove());
         }, 4000);
     }
 
-    /**
-     * Fetches card data from the Scryfall API, handling pagination and rate limits.
-     * @param {string} query - The Scryfall search query.
-     */
     async function fetchScryfallData(query) {
-        // Reset UI and state for a new search
         searchError.classList.add('hidden');
         searchError.textContent = '';
         progressContainer.classList.remove('hidden');
@@ -255,34 +257,22 @@ document.addEventListener('DOMContentLoaded', () => {
                     throw new Error(errorData.details || `HTTP error! status: ${response.status}`);
                 }
                 const pageData = await response.json();
-
-                if (!total_cards) {
-                    total_cards = pageData.total_cards;
-                }
+                if (!total_cards) total_cards = pageData.total_cards;
                 
                 cards.push(...pageData.data);
                 
-                // Update progress
                 const progressPercentage = Math.round((cards.length / total_cards) * 100);
                 progressBar.style.width = `${progressPercentage}%`;
                 progressText.textContent = `Loading... ${cards.length} / ${total_cards} cards`;
                 
                 next_page_url = pageData.has_more ? pageData.next_page : null;
-
-                // Respect Scryfall's rate limit
-                if (next_page_url) {
-                    await new Promise(resolve => setTimeout(resolve, 100)); 
-                }
+                if (next_page_url) await new Promise(resolve => setTimeout(resolve, 100)); 
             }
-
             allCards = cards;
-            
-            // Post-fetch actions
             clearUnpinnedCharts();
             populateDataPropertyDropdown();
             chartBuilder.classList.remove('hidden');
             progressText.textContent = `Success! Found ${total_cards} cards.`;
-
         } catch (error) {
             console.error('Scryfall API Error:', error);
             allCards = [];
@@ -291,19 +281,14 @@ document.addEventListener('DOMContentLoaded', () => {
             searchError.classList.remove('hidden');
             progressContainer.classList.add('hidden');
         } finally {
-            // Re-enable search button
             searchButton.disabled = false;
             searchIcon.classList.remove('hidden');
             searchSpinner.classList.add('hidden');
         }
     }
 
-    /**
-     * Populates the 'Data Property' dropdown based on available keys in the fetched card data.
-     */
     function populateDataPropertyDropdown() {
         if (allCards.length === 0) return;
-
         const firstCard = allCards[0];
         const validKeys = Object.keys(firstCard).filter(key => {
             const value = firstCard[key];
@@ -317,220 +302,132 @@ document.addEventListener('DOMContentLoaded', () => {
             option.textContent = key;
             dataPropertySelect.appendChild(option);
         });
-        
-        // Hide irrelevant controls initially
-        categoryLimitWrapper.classList.add('hidden');
+        updateDynamicUI(); // Reset UI state
     }
 
-    /**
-     * Clears all charts from the grid that are not pinned.
-     */
     function clearUnpinnedCharts() {
         const charts = chartGrid.querySelectorAll('.chart-wrapper');
         charts.forEach(chart => {
             if (!chart.dataset.pinned || chart.dataset.pinned === 'false') {
-                // MODIFICATION: Clean up the chart's data from the cache
                 const chartId = chart.dataset.chartId;
-                if (chartId) {
-                    delete chartDataCache[chartId];
-                }
+                if (chartId) delete chartDataCache[chartId];
                 chart.remove();
             }
         });
     }
 
-    /**
-     * Processes the card data based on the selected property and its type.
-     * @param {string} property - The card property to analyze.
-     * @param {string} chartId - The unique ID of the chart to get the correct data source.
-     * @returns {Array} - An array of objects {label, value} for charting.
-     */
-    function processData(property, chartId) {
-        // MODIFICATION: Use the cached data source for the specific chart
+    function processData(property, chartId, hiddenCategories = new Set()) {
         const dataSource = chartDataCache[chartId];
         if (!dataSource) return [];
 
         const counts = new Map();
-        const firstValue = dataSource.length > 0 ? dataSource.find(c => c[property] !== undefined && c[property] !== null)?.[property] : undefined;
+        const firstValue = dataSource.find(c => c[property] != null)?.[property];
         const isArray = Array.isArray(firstValue);
-        const isNumeric = typeof firstValue === 'number' && !isArray;
+        
+        const chartWrapper = document.querySelector(`[data-chart-id="${chartId}"]`);
+        const config = chartWrapper ? JSON.parse(chartWrapper.dataset.config) : {};
+        const arrayMode = config.arrayMode || arrayHandlingModeSelect.value;
+        const isColorProp = property === 'colors' || property === 'color_identity';
 
-        // Special handling for array properties
-        if (property === 'colors' || property === 'color_identity') {
-            dataSource.forEach(card => {
-                const colors = card[property] || [];
-                let category;
-                if (colors.length === 0) {
-                    category = 'Colorless';
-                } else if (colors.length > 1) {
-                    category = 'Multicolor';
-                } else {
-                    category = colors[0];
-                }
-                counts.set(category, (counts.get(category) || 0) + 1);
-            });
-        } else if (isArray) { // Flatten other arrays (e.g., keywords)
-            dataSource.forEach(card => {
-                if (Array.isArray(card[property])) {
-                    card[property].forEach(item => {
-                         counts.set(item, (counts.get(item) || 0) + 1);
+        if (isArray) {
+            switch (arrayMode) {
+                case 'summarize':
+                    dataSource.forEach(card => {
+                        const value = card[property] || [];
+                        let category = value.length === 0 ? 'Colorless' : value.length > 1 ? 'Multicolor' : value[0];
+                        counts.set(category, (counts.get(category) || 0) + 1);
                     });
-                }
-            });
-        } else { // Handle primitive types (string, number, boolean)
+                    break;
+                case 'combine':
+                    dataSource.forEach(card => {
+                        const value = card[property] || [];
+                        let category = value.length === 0 ? (isColorProp ? 'Colorless' : 'None') : [...value].sort().join('');
+                        counts.set(category, (counts.get(category) || 0) + 1);
+                    });
+                    break;
+                case 'flatten':
+                default:
+                    dataSource.forEach(card => {
+                        const value = card[property] || [];
+                        if (value.length === 0) {
+                            const emptyCategory = isColorProp ? 'Colorless' : 'None';
+                            counts.set(emptyCategory, (counts.get(emptyCategory) || 0) + 1);
+                        } else {
+                            value.forEach(item => counts.set(item, (counts.get(item) || 0) + 1));
+                        }
+                    });
+                    break;
+            }
+        } else {
             dataSource.forEach(card => {
                 let value = card[property];
-                if (value === null || value === undefined) value = 'N/A';
+                if (value == null) value = 'N/A';
                 counts.set(value, (counts.get(value) || 0) + 1);
             });
         }
         
-        let data = Array.from(counts, ([label, value]) => ({ label, value }));
+        let data = Array.from(counts, ([label, value]) => ({ label, value }))
+                      .filter(d => !hiddenCategories.has(String(d.label)));
         
-        // Sort and limit data
+        const isNumeric = typeof firstValue === 'number' && !isArray;
         if (isNumeric) {
             data.sort((a, b) => a.label - b.label);
         } else {
             data.sort((a, b) => b.value - a.value);
-            const limit = parseInt(categoryLimitInput.value, 10) || 15;
+            const limit = parseInt(config.limit, 10) || 15;
             data = data.slice(0, limit);
         }
         
         return data;
     }
     
-    /**
-     * Generates and manages the dynamic color mapping UI based on current selections.
-     */
     function updateDynamicUI() {
         const property = dataPropertySelect.value;
-
         if (!property) {
             categoryLimitWrapper.classList.add('hidden');
-            colorMapperContainer.innerHTML = '';
+            arrayHandlingWrapper.classList.add('hidden');
             return;
         }
 
-        const firstValue = allCards.length > 0 ? allCards.find(c => c[property] !== undefined && c[property] !== null)?.[property] : undefined;
+        const firstValue = allCards.find(c => c[property] != null)?.[property];
         const isNumeric = typeof firstValue === 'number' && !Array.isArray(firstValue);
+        const isArray = Array.isArray(firstValue);
 
-        // Toggle Category Limit visibility
-        if (isNumeric) {
-            categoryLimitWrapper.classList.add('hidden');
-        } else {
-            categoryLimitWrapper.classList.remove('hidden');
+        categoryLimitWrapper.classList.toggle('hidden', isNumeric);
+        arrayHandlingWrapper.classList.toggle('hidden', !isArray);
+
+        if (isArray) {
+            const isColorProp = property === 'colors' || property === 'color_identity';
+            summarizeOption.classList.toggle('hidden', !isColorProp);
+            if (!isColorProp && arrayHandlingModeSelect.value === 'summarize') {
+                arrayHandlingModeSelect.value = 'flatten';
+            }
         }
-        
-        // Update Color Mapper
-        updateColorMapper();
-    }
-
-    /**
-     * Generates and manages the dynamic color mapping UI.
-     */
-    function updateColorMapper() {
-        colorMapperContainer.innerHTML = '';
-        const property = dataPropertySelect.value;
-        if (!property) return;
-
-        const firstValue = allCards.length > 0 ? allCards.find(c => c[property] !== undefined && c[property] !== null)?.[property] : undefined;
-        const isCategorical = typeof firstValue !== 'number' || Array.isArray(firstValue);
-
-        if (!isCategorical) return;
-
-        // Create a temporary ID to process data from the *current* search for the UI
-        const tempId = 'temp-for-ui';
-        chartDataCache[tempId] = allCards;
-        const processedData = processData(property, tempId);
-        delete chartDataCache[tempId]; // Clean up temp data
-
-        if(processedData.length === 0) return;
-
-        const wrapper = document.createElement('div');
-        wrapper.className = 'bg-gray-700 p-4 rounded-lg';
-        wrapper.innerHTML = `<h4 class="text-md font-semibold mb-3 text-gray-200">Custom Color Mapping</h4>`;
-        
-        const grid = document.createElement('div');
-        grid.className = 'grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-x-4 gap-y-2';
-
-        processedData.forEach(({label}) => {
-            const item = document.createElement('div');
-            item.className = 'flex items-center gap-2';
-            item.innerHTML = `
-                <input type="color" id="color-${label}" data-label="${label}" class="color-input h-6 w-8 p-0 border-none rounded cursor-pointer bg-transparent" value="${getInitialColor(label, property)}">
-                <label for="color-${label}" class="text-sm text-gray-300 truncate" title="${label}">${label}</label>
-            `;
-            grid.appendChild(item);
-        });
-
-        wrapper.appendChild(grid);
-        colorMapperContainer.appendChild(wrapper);
     }
     
-    /**
-     * Provides initial default colors for the color picker.
-     * @param {string} label - The data category label (e.g., 'W', 'mythic').
-     * @param {string} property - The property being charted.
-     * @returns {string} - A hex color code.
-     */
     function getInitialColor(label, property) {
         const magicColorMap = {
             'W': '#f8f8f8', 'U': '#5e9fe6', 'B': '#3c3c3c',
-            'R': '#e47878', 'G': '#5b9971', 'Multicolor': '#d4af37', 'Colorless': '#a9a9a9'
+            'R': '#e47878', 'G': '#5b9971', 'Multicolor': '#d4af37', 'Colorless': '#a9a9a9',
+            'None': '#6b7280',
+            'WU': '#a5b4fc', 'UB': '#7c3aed', 'BR': '#ef4444', 'RG': '#22c55e', 'GW': '#facc15',
+            'WB': '#a8a29e', 'UR': '#f97316', 'BG': '#15803d', 'RW': '#fed7aa', 'GU': '#2dd4bf'
         };
-        if ((property === 'colors' || property === 'color_identity') && magicColorMap[label]) {
-            return magicColorMap[label];
-        }
-        // Fallback to a simple hash function for pseudo-random but consistent colors
+        if (magicColorMap[label]) return magicColorMap[label];
+
+        const defaultPalette = [
+            '#55a8e2', '#69d2e7', '#a7dbd8', '#e0e4cc', '#f38630',
+            '#fa6900', '#fe4365', '#fc9d9a', '#f9cdad', '#c8c8a9',
+            '#83af9b', '#ecd078', '#d95b43', '#c02942', '#542437',
+            '#53777a', '#a3a948', '#edb92e', '#f2583e', '#d84a38'
+        ];
         let hash = 0;
         for (let i = 0; i < String(label).length; i++) {
             hash = String(label).charCodeAt(i) + ((hash << 5) - hash);
         }
-        let color = '#';
-        for (let i = 0; i < 3; i++) {
-            const value = (hash >> (i * 8)) & 0xFF;
-            color += ('00' + value.toString(16)).substr(-2);
-        }
-        return color;
+        return defaultPalette[Math.abs(hash) % defaultPalette.length];
     }
 
-
-    /**
-     * Gets the color scale for a chart, prioritizing user input, then special cases, then defaults.
-     * @param {string} property - The card property being charted.
-     * @param {Array} domain - The array of labels for the chart.
-     * @returns {d3.ScaleOrdinal} - A D3 ordinal scale for colors.
-     */
-    function getColorScale(property, domain) {
-        // 1. Check for user-defined colors from the UI
-        const colorInputs = colorMapperContainer.querySelectorAll('.color-input');
-        const customColorMap = new Map();
-        if (colorInputs.length > 0) {
-            colorInputs.forEach(input => {
-                customColorMap.set(input.dataset.label, input.value);
-            });
-            // Only use if it has entries
-            if (customColorMap.size > 0) {
-                 return d3.scaleOrdinal().domain(domain).range(domain.map(d => customColorMap.get(String(d)) || getInitialColor(d, property)));
-            }
-        }
-        
-        // 2. Check for Magic: The Gathering specific color properties
-        const magicColorMap = {
-            'W': 'whitesmoke', 'U': 'skyblue', 'B': 'darkslategray', 
-            'R': 'indianred', 'G': 'seagreen', 'Multicolor': 'gold', 'Colorless': 'gray'
-        };
-        if (property === 'colors' || property === 'color_identity') {
-            return d3.scaleOrdinal().domain(domain).range(domain.map(d => magicColorMap[d] || 'purple'));
-        }
-
-        // 3. Fallback to a standard D3 color scheme
-        return d3.scaleOrdinal(d3.schemeTableau10).domain(domain);
-    }
-
-    /**
-     * Main function to create and render a chart.
-     */
     function createChart() {
         const property = dataPropertySelect.value;
         if (!property) {
@@ -538,40 +435,32 @@ document.addEventListener('DOMContentLoaded', () => {
             return;
         }
 
-        // MODIFICATION: Create a unique ID and cache the current dataset
         const chartId = `chart_${crypto.randomUUID()}`;
         chartDataCache[chartId] = [...allCards];
 
-        const chartType = chartTypeSelect.value;
-        const data = processData(property, chartId); // Use the new ID to process
-        if(data.length === 0) {
-            showAlert(`No data found for property: ${property}.`, true);
-            delete chartDataCache[chartId]; // Clean up cache if chart fails
-            return;
-        }
-
-        const title = chartTitleInput.value || `${property.replace(/_/g, ' ')} Distribution`;
-
-        // Create wrapper for chart and controls
         const chartWrapper = document.createElement('div');
         chartWrapper.className = 'chart-wrapper h-96 bg-gray-800 rounded-xl shadow-lg p-4 flex flex-col relative';
         chartWrapper.dataset.pinned = 'false';
-        chartWrapper.dataset.chartId = chartId; // MODIFICATION: Store ID on the element
+        chartWrapper.dataset.chartId = chartId;
         
-        // Add chart controls (pin, delete)
-        const controls = document.createElement('div');
-        controls.className = 'absolute top-3 right-3 flex gap-2';
-        controls.innerHTML = `
-            <button class="pin-btn p-2 bg-gray-700 hover:bg-gray-600 rounded-full transition text-gray-300 hover:text-white" title="Pin chart">
-                <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
-                    <path d="M5 4a2 2 0 012-2h6a2 2 0 012 2v14l-5-2.5L5 18V4z" />
-                </svg>
-            </button>
-            <button class="delete-btn p-2 bg-gray-700 hover:bg-red-500 rounded-full transition text-gray-300 hover:text-white" title="Delete chart">
-                 <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M9 2a1 1 0 00-.894.553L7.382 4H4a1 1 0 000 2v10a2 2 0 002 2h8a2 2 0 002-2V6a1 1 0 100-2h-3.382l-.724-1.447A1 1 0 0011 2H9zM7 8a1 1 0 012 0v6a1 1 0 11-2 0V8zm4 0a1 1 0 012 0v6a1 1 0 11-2 0V8z" clip-rule="evenodd" /></svg>
-            </button>
-        `;
-        chartWrapper.appendChild(controls);
+        const firstValue = allCards.find(c => c[property] != null)?.[property];
+        const isArray = Array.isArray(firstValue);
+        const config = {
+            property, chartType: chartTypeSelect.value, 
+            title: chartTitleInput.value || `${property.replace(/_/g, ' ')} Distribution`, 
+            limit: categoryLimitInput.value,
+            arrayMode: isArray ? arrayHandlingModeSelect.value : null
+        };
+        chartWrapper.dataset.config = JSON.stringify(config);
+        
+        const data = processData(property, chartId);
+        if (data.length === 0) {
+            showAlert(`No data found for property: ${property}.`, true);
+            delete chartDataCache[chartId];
+            return;
+        }
+
+        buildChartControls(chartWrapper, data);
 
         const chartElement = document.createElement('div');
         chartElement.className = 'flex-grow min-h-0';
@@ -579,150 +468,218 @@ document.addEventListener('DOMContentLoaded', () => {
         
         chartGrid.prepend(chartWrapper);
         
-        // MODIFICATION: Pass chartId to render functions
-        if (chartType === 'bar') {
-            renderBarChart(chartElement, data, title, property, chartId);
+        requestAnimationFrame(() => redrawChart(chartId));
+    }
+    
+    function buildChartControls(chartWrapper, initialData) {
+        const chartId = chartWrapper.dataset.chartId;
+
+        const mainControls = document.createElement('div');
+        mainControls.className = 'absolute top-3 right-3 z-20 flex gap-2';
+        // FIX: Updated settings icon to a 'sliders' icon
+        mainControls.innerHTML = `
+            <button class="settings-btn p-2 bg-gray-700 hover:bg-gray-600 rounded-full transition text-gray-300 hover:text-white" title="Customize Categories">
+                <svg class="h-5 w-5" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor">
+                  <path stroke-linecap="round" stroke-linejoin="round" d="M10.5 6h9.75M10.5 6a1.5 1.5 0 11-3 0m3 0a1.5 1.5 0 10-3 0M3.75 6H7.5m3 12h9.75m-9.75 0a1.5 1.5 0 01-3 0m3 0a1.5 1.5 0 00-3 0m-3.75 0H7.5m9-6h3.75m-3.75 0a1.5 1.5 0 01-3 0m3 0a1.5 1.5 0 00-3 0m-9.75 0h9.75" />
+                </svg>
+            </button>
+            <button class="delete-btn p-2 bg-gray-700 hover:bg-red-500 rounded-full transition text-gray-300 hover:text-white" title="Delete chart">
+                 <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M9 2a1 1 0 00-.894.553L7.382 4H4a1 1 0 000 2v10a2 2 0 002 2h8a2 2 0 002-2V6a1 1 0 100-2h-3.382l-.724-1.447A1 1 0 0011 2H9zM7 8a1 1 0 012 0v6a1 1 0 11-2 0V8zm4 0a1 1 0 012 0v6a1 1 0 11-2 0V8z" clip-rule="evenodd" /></svg>
+            </button>
+        `;
+
+        const pinControl = document.createElement('div');
+        pinControl.className = 'absolute top-3 left-3 z-20';
+        pinControl.innerHTML = `<button class="pin-btn p-2 bg-gray-700 hover:bg-gray-600 rounded-full transition text-gray-300 hover:text-white" title="Pin chart"><svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" viewBox="0 0 20 20" fill="currentColor"><path d="M5 4a2 2 0 012-2h6a2 2 0 012 2v14l-5-2.5L5 18V4z" /></svg></button>`;
+        
+        const sidePanel = document.createElement('div');
+        sidePanel.className = 'chart-side-panel absolute top-0 right-0 h-full w-64 bg-gray-900 bg-opacity-90 backdrop-blur-sm p-4 z-10 shadow-lg';
+        sidePanel.innerHTML = `<h4 class="text-lg font-bold mb-3 text-white">Category Customization</h4>`;
+        
+        const controlList = document.createElement('div');
+        controlList.className = 'flex flex-col gap-2 overflow-y-auto h-[calc(100%-2rem)]';
+
+        initialData.forEach(({ label }) => {
+            const item = document.createElement('div');
+            item.className = 'flex items-center gap-2 text-sm';
+            item.innerHTML = `
+                <input type="checkbox" id="vis-${chartId}-${label}" data-label="${label}" class="visibility-toggle h-4 w-4 rounded bg-gray-700 border-gray-600 text-indigo-600 focus:ring-indigo-500 cursor-pointer" checked>
+                <input type="color" id="color-${chartId}-${label}" data-label="${label}" class="chart-color-input h-6 w-8 p-0 border-none rounded cursor-pointer bg-transparent" value="${getInitialColor(label, '')}">
+                <label for="vis-${chartId}-${label}" class="text-gray-300 truncate flex-1" title="${label}">${label}</label>
+            `;
+            controlList.appendChild(item);
+        });
+
+        sidePanel.appendChild(controlList);
+        chartWrapper.append(pinControl, mainControls, sidePanel);
+    }
+
+    function redrawChart(chartId) {
+        const chartWrapper = document.querySelector(`[data-chart-id="${chartId}"]`);
+        if (!chartWrapper) return;
+        
+        const config = JSON.parse(chartWrapper.dataset.config);
+        const chartElement = chartWrapper.querySelector('.flex-grow');
+        
+        const hiddenCategories = new Set();
+        chartWrapper.querySelectorAll('.visibility-toggle:not(:checked)').forEach(toggle => {
+            hiddenCategories.add(toggle.dataset.label);
+        });
+
+        const customColorMap = new Map();
+        chartWrapper.querySelectorAll('.chart-color-input').forEach(input => {
+            customColorMap.set(input.dataset.label, input.value);
+        });
+
+        const colorScale = d3.scaleOrdinal()
+            .domain(Array.from(customColorMap.keys()))
+            .range(Array.from(customColorMap.values()));
+            
+        const data = processData(config.property, chartId, hiddenCategories);
+
+        if (config.chartType === 'bar') {
+            renderBarChart(chartElement, data, config.title, colorScale, chartId);
         } else {
-            renderPieChart(chartElement, data, title, property, chartId);
+            renderPieChart(chartElement, data, config.title, colorScale, chartId);
         }
     }
-    
-    // --- D3 RENDERING FUNCTIONS ---
-    
-    function renderBarChart(container, data, title, property, chartId) {
-        const colorScale = getColorScale(property, data.map(d => d.label));
+
+    function renderBarChart(container, data, title, colorScale, chartId) {
         const margin = {top: 40, right: 30, bottom: 100, left: 60};
+        const { width, height } = container.getBoundingClientRect();
+        if (width <= 0 || height <= 0) return;
 
-        const resizeObserver = new ResizeObserver(entries => {
-            for (let entry of entries) {
-                const { width, height } = entry.contentRect;
-                if (width <= 0 || height <= 0) continue;
+        d3.select(container).select('svg').remove();
+        const svg = d3.select(container).append("svg").attr("width", width).attr("height", height)
+            .append("g").attr("transform", `translate(${margin.left},${margin.top})`);
+        
+        const w = width - margin.left - margin.right;
+        const h = height - margin.top - margin.bottom;
+        const x = d3.scaleBand().range([0, w]).domain(data.map(d => d.label)).padding(0.2);
+        svg.append("g").attr("transform", `translate(0,${h})`).call(d3.axisBottom(x))
+            .selectAll("text").attr("transform", "translate(-10,0)rotate(-45)").style("text-anchor", "end").style("fill", "#9ca3af");
+        
+        const y = d3.scaleLinear().domain([0, d3.max(data, d => d.value) || 1]).range([h, 0]);
+        svg.append("g").call(d3.axisLeft(y)).selectAll("text").style("fill", "#9ca3af");
+        
+        svg.selectAll("mybar").data(data, d => d.label).join(
+            enter => enter.append("rect")
+                .attr("x", d => x(d.label))
+                .attr("y", y(0))
+                .attr("width", x.bandwidth())
+                .attr("height", 0)
+                .attr("fill", d => colorScale(d.label))
+                .style("cursor", "pointer")
+                .on("click", (event, d) => showCardModal(d.label, chartId))
+                .on("mouseover", () => tooltip.style("opacity", 1))
+                .on("mousemove", (event, d) => {
+                    const total = d3.sum(data, item => item.value);
+                    const percentage = total > 0 ? ((d.value / total) * 100).toFixed(1) : 0;
+                    tooltip.html(`<strong>${d.label}</strong><br>${d.value} cards (${percentage}%)`)
+                        .style("left", (event.pageX + 15) + "px").style("top", (event.pageY - 28) + "px");
+                })
+                .on("mouseout", () => tooltip.style("opacity", 0))
+                .transition().duration(500)
+                .attr("y", d => y(d.value))
+                .attr("height", d => h - y(d.value)),
+            update => update
+                .transition().duration(500)
+                .attr("x", d => x(d.label))
+                .attr("y", d => y(d.value))
+                .attr("width", x.bandwidth())
+                .attr("height", d => h - y(d.value))
+                .attr("fill", d => colorScale(d.label)),
+            exit => exit.transition().duration(500)
+                .attr("y", y(0))
+                .attr("height", 0)
+                .remove()
+        );
 
-                d3.select(container).select('svg').remove();
-
-                const svg = d3.select(container)
-                    .append("svg")
-                    .attr("width", width)
-                    .attr("height", height)
-                    .append("g")
-                    .attr("transform", `translate(${margin.left},${margin.top})`);
-                
-                const w = width - margin.left - margin.right;
-                const h = height - margin.top - margin.bottom;
-
-                const x = d3.scaleBand().range([0, w]).domain(data.map(d => d.label)).padding(0.2);
-                svg.append("g").attr("transform", `translate(0,${h})`).call(d3.axisBottom(x))
-                    .selectAll("text").attr("transform", "translate(-10,0)rotate(-45)").style("text-anchor", "end").style("fill", "#9ca3af");
-
-                const y = d3.scaleLinear().domain([0, d3.max(data, d => d.value)]).range([h, 0]);
-                svg.append("g").call(d3.axisLeft(y)).selectAll("text").style("fill", "#9ca3af");
-
-                svg.selectAll("mybar").data(data).join("rect")
-                    .attr("x", d => x(d.label))
-                    .attr("y", d => y(0))
-                    .attr("width", x.bandwidth())
-                    .attr("height", d => 0)
-                    .attr("fill", d => colorScale(d.label))
-                    .style("cursor", "pointer")
-                    .on("mouseover", (event, d) => tooltip.style("opacity", 1))
-                    .on("mousemove", (event, d) => {
-                        const total = d3.sum(data, d => d.value);
-                        const percentage = ((d.value / total) * 100).toFixed(1);
-                        tooltip.html(`<strong>${d.label}</strong><br>${d.value} cards (${percentage}%)`)
-                            .style("left", (event.pageX + 15) + "px").style("top", (event.pageY - 28) + "px");
-                    })
-                    .on("mouseout", () => tooltip.style("opacity", 0))
-                    // MODIFICATION: Pass chartId to the modal function
-                    .on("click", (event, d) => showCardModal(d.label, property, chartId))
-                    .transition().duration(800)
-                    .attr("y", d => y(d.value))
-                    .attr("height", d => h - y(d.value));
-
-                svg.append("text").attr("x", w / 2).attr("y", 0 - (margin.top / 2)).attr("text-anchor", "middle")
-                    .style("font-size", "16px").style("fill", "white").style("font-weight", "bold").text(title);
-            }
-        });
-        resizeObserver.observe(container);
+        svg.selectAll('.chart-title').data([title]).join('text')
+            .attr("class", 'chart-title')
+            .attr("x", w / 2).attr("y", 0 - (margin.top / 2)).attr("text-anchor", "middle")
+            .style("font-size", "16px").style("fill", "white").style("font-weight", "bold").text(t => t);
     }
     
-    function renderPieChart(container, data, title, property, chartId) {
-        const colorScale = getColorScale(property, data.map(d => d.label));
+    function renderPieChart(container, data, title, colorScale, chartId) {
         const margin = { top: 40, right: 20, bottom: 20, left: 20 };
+        const { width, height } = container.getBoundingClientRect();
+        if (width <= 0 || height <= 0) return;
 
-        const resizeObserver = new ResizeObserver(entries => {
-            for (let entry of entries) {
-                const { width, height } = entry.contentRect;
-                if (width <= 0 || height <= 0) continue;
-
-                d3.select(container).select('svg').remove();
-                
-                const radius = Math.min(width, height) / 2 - Math.max(margin.top, margin.right);
-
-                const svg = d3.select(container).append("svg").attr("width", width).attr("height", height)
-                    .append("g").attr("transform", `translate(${width / 2}, ${height / 2})`);
-
-                const pie = d3.pie().value(d => d.value).sort(null);
-                const arc = d3.arc().innerRadius(radius * 0.5).outerRadius(radius * 0.8);
-
-                svg.selectAll('allSlices').data(pie(data)).join('path')
-                    .attr('d', arc).attr('fill', d => colorScale(d.data.label)).attr('stroke', '#1f2937')
-                    .style('stroke-width', '2px').style("cursor", "pointer")
-                    .on("mouseover", (event, d) => {
-                        tooltip.style("opacity", 1);
-                        d3.select(event.currentTarget).transition().duration(200).attr('d', d3.arc().innerRadius(radius * 0.5).outerRadius(radius * 0.85));
-                    })
-                    .on("mousemove", (event, d) => {
-                        const total = d3.sum(data, d => d.value);
-                        const percentage = ((d.data.value / total) * 100).toFixed(1);
-                        tooltip.html(`<strong>${d.data.label}</strong><br>${d.data.value} cards (${percentage}%)`)
-                            .style("left", (event.pageX + 15) + "px").style("top", (event.pageY - 28) + "px");
-                    })
-                    .on("mouseout", (event, d) => {
-                        tooltip.style("opacity", 0);
-                        d3.select(event.currentTarget).transition().duration(200).attr('d', arc);
-                    })
-                    // MODIFICATION: Pass chartId to the modal function
-                    .on("click", (event, d) => showCardModal(d.data.label, property, chartId))
-                    .transition().duration(800)
-                    .attrTween('d', function(d) {
-                        const i = d3.interpolate({startAngle: 0, endAngle: 0}, d);
-                        return function(t) { return arc(i(t)); };
-                    });
-
-                d3.select(container).select('svg').append("text")
-                    .attr("x", width / 2).attr("y", margin.top / 2 + 5).attr("text-anchor", "middle")
-                    .style("font-size", "16px").style("fill", "white").style("font-weight", "bold").text(title);
-            }
-        });
-        resizeObserver.observe(container);
+        d3.select(container).select('svg').remove();
+        const radius = Math.min(width, height) / 2 - Math.max(margin.top, margin.right);
+        const svg = d3.select(container).append("svg").attr("width", width).attr("height", height)
+            .append("g").attr("transform", `translate(${width / 2}, ${height / 2})`);
+        
+        const pie = d3.pie().value(d => d.value).sort(null);
+        const arc = d3.arc().innerRadius(radius * 0.5).outerRadius(radius * 0.8);
+        
+        svg.selectAll('path').data(pie(data), d => d.data.label).join(
+            enter => enter.append('path')
+                .attr('fill', d => colorScale(d.data.label))
+                .attr('stroke', '#1f2937').style('stroke-width', '2px').style("cursor", "pointer")
+                .on("click", (event, d) => showCardModal(d.data.label, chartId))
+                .on("mouseover", (event, d) => {
+                    tooltip.style("opacity", 1);
+                    d3.select(event.currentTarget).transition().duration(200).attr('d', d3.arc().innerRadius(radius * 0.5).outerRadius(radius * 0.85));
+                })
+                .on("mousemove", (event, d) => {
+                    const total = d3.sum(data, item => item.value);
+                    const percentage = total > 0 ? ((d.data.value / total) * 100).toFixed(1) : 0;
+                    tooltip.html(`<strong>${d.data.label}</strong><br>${d.data.value} cards (${percentage}%)`)
+                        .style("left", (event.pageX + 15) + "px").style("top", (event.pageY - 28) + "px");
+                })
+                .on("mouseout", (event, d) => {
+                    tooltip.style("opacity", 0);
+                    d3.select(event.currentTarget).transition().duration(200).attr('d', arc);
+                })
+                .transition().duration(800)
+                .attrTween('d', d => {
+                    const i = d3.interpolate({ startAngle: d.startAngle, endAngle: d.startAngle }, d);
+                    return t => arc(i(t));
+                }),
+            update => update,
+            exit => exit.transition().duration(800).attrTween('d', d => {
+                    const i = d3.interpolate(d, { startAngle: d.endAngle, endAngle: d.endAngle });
+                    return t => arc(i(t));
+                }).remove()
+        );
+        
+        svg.selectAll('.chart-title').data([title]).join('text')
+            .attr("class", 'chart-title')
+            .attr("x", 0).attr("y", -height/2 + margin.top -5).attr("text-anchor", "middle")
+            .style("font-size", "16px").style("fill", "white").style("font-weight", "bold").text(t => t);
     }
     
-    // --- MODAL AND INTERACTIVITY ---
-
-    /**
-     * Shows a modal with images of cards matching a specific category.
-     * @param {string} categoryLabel - The label of the clicked chart segment.
-     * @param {string} property - The property used for filtering.
-     * @param {string} chartId - The unique ID of the chart being interacted with.
-     */
-    function showCardModal(categoryLabel, property, chartId) {
+    function showCardModal(categoryLabel, chartId) {
         modalGrid.innerHTML = ''; 
-        
-        // MODIFICATION: Use the specific chart's cached data source
         const dataSource = chartDataCache[chartId] || [];
+        const chartWrapper = document.querySelector(`[data-chart-id="${chartId}"]`);
+        if (!chartWrapper) return;
         
+        const config = JSON.parse(chartWrapper.dataset.config);
+        const { property, arrayMode } = config;
+
         const filteredCards = dataSource.filter(card => {
-            const val = card[property];
-            if (property === 'colors' || property === 'color_identity') {
-                const colors = val || [];
-                if (categoryLabel === 'Colorless') return colors.length === 0;
-                if (categoryLabel === 'Multicolor') return colors.length > 1;
-                return colors.length === 1 && colors[0] === categoryLabel;
+            const val = card[property] || [];
+            if (arrayMode) {
+                let cardCategory;
+                const isColorProp = property === 'colors' || property === 'color_identity';
+                switch(arrayMode) {
+                    case 'summarize':
+                        cardCategory = val.length === 0 ? 'Colorless' : val.length > 1 ? 'Multicolor' : val[0];
+                        return cardCategory === categoryLabel;
+                    case 'combine':
+                        cardCategory = val.length === 0 ? (isColorProp ? 'Colorless' : 'None') : [...val].sort().join('');
+                        return cardCategory === categoryLabel;
+                    case 'flatten':
+                    default:
+                        if (val.length === 0) return categoryLabel === (isColorProp ? 'Colorless' : 'None');
+                        return val.includes(categoryLabel);
+                }
             }
-            if (Array.isArray(val)) {
-                return val.includes(categoryLabel);
-            }
-            return String(val) === String(categoryLabel) || ((val === null || val === undefined) && categoryLabel === 'N/A');
+            const cardCategory = (card[property] == null) ? 'N/A' : String(card[property]);
+            return cardCategory === categoryLabel;
         });
 
         modalTitle.textContent = `${categoryLabel} (${filteredCards.length} cards)`;
@@ -735,13 +692,11 @@ document.addEventListener('DOMContentLoaded', () => {
                     link.href = card.scryfall_uri;
                     link.target = '_blank';
                     link.rel = 'noopener noreferrer';
-                    
                     const img = document.createElement('img');
                     img.src = imgUrl;
                     img.alt = card.name;
                     img.className = 'w-full rounded-lg shadow-md hover:scale-105 transition-transform duration-200';
                     img.loading = 'lazy';
-                    
                     link.appendChild(img);
                     modalGrid.appendChild(link);
                 }
@@ -749,61 +704,50 @@ document.addEventListener('DOMContentLoaded', () => {
         } else {
             modalGrid.innerHTML = `<p class="text-gray-400 col-span-full text-center">No cards with images found for this category.</p>`;
         }
-        
         cardModal.classList.remove('hidden');
     }
 
     // --- EVENT LISTENERS ---
     searchButton.addEventListener('click', () => {
         const query = searchInput.value.trim();
-        if (query) {
-            fetchScryfallData(query);
-        } else {
-            showAlert('Please enter a search query.', true);
-        }
+        if (query) fetchScryfallData(query);
+        else showAlert('Please enter a search query.', true);
     });
-
     searchInput.addEventListener('keypress', (e) => {
-        if (e.key === 'Enter') {
-            searchButton.click();
-        }
+        if (e.key === 'Enter') searchButton.click();
     });
-
     addChartButton.addEventListener('click', createChart);
-    
     dataPropertySelect.addEventListener('change', updateDynamicUI);
-    categoryLimitInput.addEventListener('input', updateDynamicUI);
-
     modalCloseButton.addEventListener('click', () => cardModal.classList.add('hidden'));
     cardModal.addEventListener('click', (e) => {
-        if (e.target === cardModal) { // Close if clicking on the backdrop
-            cardModal.classList.add('hidden');
-        }
+        if (e.target === cardModal) cardModal.classList.add('hidden');
     });
-    
-    // Event delegation for chart controls
+
     chartGrid.addEventListener('click', (e) => {
-        const deleteBtn = e.target.closest('.delete-btn');
-        const pinBtn = e.target.closest('.pin-btn');
+        const chartWrapper = e.target.closest('.chart-wrapper');
+        if (!chartWrapper) return;
+        const chartId = chartWrapper.dataset.chartId;
 
-        if (deleteBtn) {
-            const chartWrapper = deleteBtn.closest('.chart-wrapper');
-            // MODIFICATION: Clean up the chart's data from the cache on delete
-            const chartId = chartWrapper.dataset.chartId;
-            if (chartId) {
-                delete chartDataCache[chartId];
-            }
+        if (e.target.closest('.delete-btn')) {
+            if (chartId) delete chartDataCache[chartId];
             chartWrapper.remove();
-        }
-
-        if (pinBtn) {
-            const chartWrapper = pinBtn.closest('.chart-wrapper');
+        } else if (e.target.closest('.pin-btn')) {
+            const pinBtn = e.target.closest('.pin-btn');
             const isPinned = chartWrapper.dataset.pinned === 'true';
             chartWrapper.dataset.pinned = !isPinned;
             pinBtn.classList.toggle('bg-indigo-500', !isPinned);
             pinBtn.classList.toggle('bg-gray-700', isPinned);
             pinBtn.classList.toggle('text-white', !isPinned);
             pinBtn.title = isPinned ? 'Pin chart' : 'Unpin chart';
+        } else if (e.target.closest('.settings-btn')) {
+            chartWrapper.querySelector('.chart-side-panel').classList.toggle('is-open');
+        }
+    });
+
+    chartGrid.addEventListener('change', (e) => {
+        const chartWrapper = e.target.closest('.chart-wrapper');
+        if (chartWrapper && (e.target.matches('.visibility-toggle') || e.target.matches('.chart-color-input'))) {
+            redrawChart(chartWrapper.dataset.chartId);
         }
     });
 });
